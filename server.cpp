@@ -114,7 +114,6 @@ int main()
 			// Send a welcome message to the client.
 			memcpy(buffer, WELCOME, strlen(WELCOME));
 			
-
 			// Check for error from send
 			if (send(clientSocket, buffer, MESSAGESIZE, 0) == ERROR_VALUE) {
 				die("Send failed: " + WSAGetLastError());
