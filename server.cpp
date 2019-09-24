@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <winsock2.h>
+#include <iostream>
+#include <sstream>
+#include <iomanip>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -107,6 +110,7 @@ int main()
 
 			// We'll use this array to hold the messages we exchange with the client.
 			char buffer[MESSAGESIZE];
+			char * messageBuffer  = NULL;
 
 			// Fill the buffer with - characters to start with.
 			memset(buffer, '-', MESSAGESIZE);
@@ -121,8 +125,30 @@ int main()
 
 			while (true)
 			{
+				char  messageLength[5];
+				recv(clientSocket, messageLength, 5, 0);
+
+				
+
+				int length;
+				std::istringstream(messageLength) >> length;
+
+				std::cout << "Message Length: " << length;
+				
+				messageBuffer = new char[length];
 				// Receive as much data from the client as will fit in the buffer.
-				int count = recv(clientSocket, buffer, MESSAGESIZE, 0);
+				int count = recv(clientSocket, messageBuffer, length, 0);
+
+				std::stringstream ss;
+				ss << std::setw(5) << std::setfill('0') << length;
+				std::string lineLength = ss.str();
+
+				std::string line = messageBuffer;
+
+				line.insert(0, lineLength);
+
+
+				std::cout <<"Message Buffer: "<< line;
 				
 				// Check for errors from recv
 				if (count == ERROR_VALUE) {
@@ -133,7 +159,7 @@ int main()
 					printf("Client closed connection\n");
 					break;
 				}
-				if (count != MESSAGESIZE) {
+				if (count != length) {
 					die("Got strange-sized message from client");
 				}
 				if (memcmp(buffer, "quit", 4) == 0) {
@@ -146,15 +172,19 @@ int main()
 				// without writing the \0 ourself.)
 
 				printf("Received %d bytes from the client: '", count);
-				fwrite(buffer, 1, count, stdout);
+				fwrite(messageBuffer, 1, count, stdout);
 				printf("'\n");
 
-				// Send the same data back to the client.
+				char * replyBuffer = new char[line.length()];
 				
+				// Send the same data back to the client.
+				memcpy(replyBuffer, line.c_str(), line.length());
+
 				// Check for error from send
-				if (send(clientSocket, buffer, MESSAGESIZE, 0) == ERROR_VALUE) {
+				if (send(clientSocket, replyBuffer, line.length(), 0) == ERROR_VALUE) {
 					die("Send failed: " + WSAGetLastError());
 				}
+				
 			}
 
 			printf("Closing connection\n");
