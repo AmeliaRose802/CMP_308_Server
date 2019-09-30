@@ -110,7 +110,7 @@ int main()
 
 			// We'll use this array to hold the messages we exchange with the client.
 			char buffer[MESSAGESIZE];
-			char * messageBuffer  = NULL;
+			
 
 			// Fill the buffer with - characters to start with.
 			memset(buffer, '-', MESSAGESIZE);
@@ -125,31 +125,20 @@ int main()
 
 			while (true)
 			{
+				char * messageBuffer;
 				char  messageLength[5];
 				recv(clientSocket, messageLength, 5, 0);
-
-				
 
 				int length;
 				std::istringstream(messageLength) >> length;
 
-				std::cout << "Message Length: " << length;
+				std::cout << "Message Length: " << length << std::endl;
 				
 				messageBuffer = new char[length];
-				// Receive as much data from the client as will fit in the buffer.
+
+				// Receive as the number of bytes of data expected
 				int count = recv(clientSocket, messageBuffer, length, 0);
 
-				std::stringstream ss;
-				ss << std::setw(5) << std::setfill('0') << length;
-				std::string lineLength = ss.str();
-
-				std::string line = messageBuffer;
-
-				line.insert(0, lineLength);
-
-
-				std::cout <<"Message Buffer: "<< line;
-				
 				// Check for errors from recv
 				if (count == ERROR_VALUE) {
 					die("recv failed: " + WSAGetLastError());
@@ -162,29 +151,39 @@ int main()
 				if (count != length) {
 					die("Got strange-sized message from client");
 				}
-				if (memcmp(buffer, "quit", 4) == 0) {
+				if (memcmp(messageBuffer, "quit", 4) == 0) {
 					printf("Client asked to quit\n");
 					break;
 				}
 
-				// (Note that recv will not write a \0 at the end of the message it's
-				// received -- so we can't just use it as a C-style string directly
-				// without writing the \0 ourself.)
+				messageBuffer[length] = '\0'; //Need to make it null terminated 
+
+				std::string line(messageBuffer);
+
+				//Build the reply string with the size stuck on front
+				std::stringstream ss;
+				ss << std::setw(5) << std::setfill('0') << length<<line;
+			
+				line = ss.str();
+				std::cout << "Return Message: "<<line << std::endl;
 
 				printf("Received %d bytes from the client: '", count);
 				fwrite(messageBuffer, 1, count, stdout);
 				printf("'\n");
 
-				char * replyBuffer = new char[line.length()];
+			
+
+				messageBuffer = new char[line.length()];
+				
 				
 				// Send the same data back to the client.
-				memcpy(replyBuffer, line.c_str(), line.length());
+				memcpy(messageBuffer, line.c_str(), line.length());
 
+				
 				// Check for error from send
-				if (send(clientSocket, replyBuffer, line.length(), 0) == ERROR_VALUE) {
+				if (send(clientSocket, messageBuffer, line.length(), 0) == ERROR_VALUE) {
 					die("Send failed: " + WSAGetLastError());
 				}
-				
 			}
 
 			printf("Closing connection\n");
