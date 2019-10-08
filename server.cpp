@@ -9,6 +9,7 @@
 #include <cstring>
 #include <list>
 #include <WinSock2.h>
+#include <iostream>
 
 #include "connection.h"
 #include "utils.h"
@@ -21,7 +22,8 @@
 
 // The TCP port number for the server to listen on
 #define SERVERPORT 5555
-#define MAX_CLIENTS 5
+#define MAX_CONNECTIONS 1
+#define IDLE_THRESHOLD 5
 
 int main()
 {
@@ -69,9 +71,10 @@ int main()
 	{
 		// The structure that describes the set of sockets we're interested in.
 		fd_set readable;
-		fd_set writable;
+		fd_set writeable;
 		FD_ZERO(&readable);
-		FD_ZERO(&writable);
+		FD_ZERO(&writeable);
+
 
 		// Add the server socket, which will become "readable" if there's a new
 		// connection to accept.
@@ -80,13 +83,12 @@ int main()
 		// Add all of the connected clients' sockets.
 		for (auto conn: conns)
 		{
-			if (conn->wantWrite())
-			{
-				FD_SET(conn->sock(), &writable);
-			}
 			if (conn->wantRead())
 			{
 				FD_SET(conn->sock(), &readable);
+			}
+			if (conn->wantWrite()) {
+				FD_SET(conn->sock(), &writeable);
 			}
 		}
 
@@ -99,7 +101,7 @@ int main()
 		// Wait for one of the sockets to become readable.
 		// (We can only get away with passing 0 for the first argument here because
 		// we're on Windows -- other sockets implementations need a proper value there.)
-		int count = select(0, &readable, &writable, NULL, &timeout);
+		int count = select(0, &readable, &writeable, NULL, &timeout);
 		if (count == SOCKET_ERROR)
 		{
 			die("select failed");
@@ -117,21 +119,18 @@ int main()
 			sockaddr_in clientAddr;
 			int addrSize = sizeof(clientAddr);
 			SOCKET clientSocket = accept(serverSocket, (sockaddr *) &clientAddr, &addrSize);
-			
 			if (clientSocket == INVALID_SOCKET)
 			{
 				printf("accept failed\n");
 				continue;
 			}
+			char sendBuffer_[40];
 
-			char sendBuffer_[MESSAGESIZE];
-
-			if (conns.size() >= MAX_CLIENTS) {
-				
+			if (conns.size() >= MAX_CONNECTIONS) {
 				printf("429: Too many requests");
 				memset(sendBuffer_, '-', MESSAGESIZE);
 				memcpy(sendBuffer_, "429", 3);
-				
+
 				count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
 				if (count != MESSAGESIZE)
 				{
@@ -140,36 +139,21 @@ int main()
 				}
 
 				closesocket(clientSocket);
-			}else {
-				if (conns.size() >= 1)
-				{
-					memset(sendBuffer_, '-', MESSAGESIZE);
-					memcpy(sendBuffer_, "NO ROOM", 7);
-					count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
-					if (count != MESSAGESIZE)
-					{
-						printf("send failed\n");
-						return true;
-					}
-
-					closesocket(clientSocket);
-				}
-				else
-				{
-					memset(sendBuffer_, '-', MESSAGESIZE);
-					memcpy(sendBuffer_, "wELCOME", 7);
-					count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
-					if (count != MESSAGESIZE)
-					{
-						printf("send failed\n");
-						return true;
-					}
-					// Create a new Connection object, and add it to the collection.
-					conns.push_back(new Connection(clientSocket));
-				}
 			}
+			else {
+				// Create a new Connection object, and add it to the collection.
+				memset(sendBuffer_, '-', MESSAGESIZE);
+				memcpy(sendBuffer_, "Welcome", 8);
 
-			
+				count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
+				if (count != MESSAGESIZE)
+				{
+					printf("send failed\n");
+					return true;
+				}
+
+				conns.push_back(new Connection(clientSocket));
+			}
 		}
 
 		// Check each of the clients.
@@ -178,35 +162,36 @@ int main()
 			Connection *conn = *it;
 			bool dead = false;
 
+			conn->incrementIdleCount();
+
 			// Is there data to read from this client's socket?
 			if (FD_ISSET(conn->sock(), &readable))
 			{
 				dead |= conn->doRead();
 			}
+			
 
-			if (dead)
-			{
-				// The client said it was dead -- so free the object,
-				// and remove it from the conns list.
-				delete conn;
-				it = conns.erase(it);
-			}
-			else
-			{
-				++it;
-			}
-		}
-
-		for (auto it = conns.begin(); it != conns.end(); )  // note no ++it here
-		{
-			Connection *conn = *it;
-			bool dead = false;
-
-			// Is there data to read from this client's socket?
-			if (FD_ISSET(conn->sock(), &writable))
+			// Can the clients socket be written to?
+			//std::cout << "Can it be sent to? " << FD_ISSET(conn->sock(), &writeable) << " Does it want it to write " << conn->wantWrite() << '\n';
+			if (FD_ISSET(conn->sock(), &writeable))
 			{
 				dead |= conn->doWrite();
 			}
+			if (conn->getIdleCount() > IDLE_THRESHOLD) {
+				dead = true;
+				char sendBuffer_[40];
+
+				std::cout << "Closing Connection due to idle client\n";
+				memset(sendBuffer_, '-', MESSAGESIZE);
+				memcpy(sendBuffer_, "420", 3);
+
+				count = send(conn->getSocket(), sendBuffer_, MESSAGESIZE, 0);
+				if (count != MESSAGESIZE)
+				{
+					printf("send failed\n");
+					return true;
+				}
+			}
 
 			if (dead)
 			{
@@ -220,7 +205,6 @@ int main()
 				++it;
 			}
 		}
-
 	}
 
 	// We won't actually get here, but if we did then we'd want to clean up...

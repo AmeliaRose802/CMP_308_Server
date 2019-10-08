@@ -33,19 +33,14 @@ SOCKET Connection::sock()
 // reading from the socket.
 bool Connection::wantRead()
 {
-	if (state == READ) {
-		return true;
-	}
-	else {
-		return false;
-	}
-	// At present, we always do.
-	
+	// If the data has been written read count will be 0
+	return readCount_ == 0;
 }
 
 // Call this when the socket is ready to read.
 bool Connection::doRead()
 {
+	idleCount = 0;
 	// Receive as much data from the client as will fit in the buffer.
 	int spaceLeft = (sizeof readBuffer_) - readCount_;
 	int count = recv(sock_, readBuffer_ + readCount_, spaceLeft, 0);
@@ -73,17 +68,16 @@ bool Connection::doRead()
 		return true;
 	}
 
-	// Clear the buffer, ready for the next message.
-	readCount_ = 0;
-	state = WRITE;
 	return false;
 }
 
-bool Connection::doWrite()
-{
-	// Send the same data back to the client.
-	// FIXME: the socket might not be ready to send yet -- so this could block!
-	// FIXME: and we might not be able to write the entire message in one go...
+
+bool Connection::wantWrite() {
+	return readCount_ != 0;
+}
+
+bool Connection::doWrite() {
+	idleCount = 0;
 	int count = send(sock_, readBuffer_, MESSAGESIZE, 0);
 	if (count != MESSAGESIZE)
 	{
@@ -91,16 +85,7 @@ bool Connection::doWrite()
 		return true;
 	}
 
-	state = READ;
+	// Clear the buffer, ready for the next message.
+	readCount_ = 0;
 	return false;
-}
-
-bool Connection::wantWrite()
-{
-	if (state == WRITE) {
-		return true;
-	}
-	else {
-		return false;
-	}
 }

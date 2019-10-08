@@ -30,18 +30,20 @@ public:
 	// Call this when the socket is ready to read.
 	bool doRead();
 
-	// Call this when the socket is ready to write.
+
+	bool wantWrite();
 	bool doWrite();
 
-	// Return whether this connection is in a state where we want to try
-	// writing from the socket.
-	bool wantWrite();
-	 
-	enum SOCKETSTATE
-	{
-		READ,
-		WRITE
-	};
+	void incrementIdleCount() {
+		idleCount++;
+	}
+	int getIdleCount() {
+		return idleCount;
+	}
+	SOCKET getSocket(){
+		return sock_;
+	}
+
 
 private:
 	// This client's socket.
@@ -49,8 +51,8 @@ private:
 
 	// The data we've read from the client.
 	int readCount_;
+	int idleCount = 0;
 	char readBuffer_[MESSAGESIZE];
-	SOCKETSTATE state = READ;
 };
 
 #endif
