@@ -1,19 +1,17 @@
-/*	AG0907 Lab 2 TCP server example - by Henry Fortuna and Adam Sampson
+/*	AG0907 Lab 5 select-based TCP server example - by Henry Fortuna and Adam Sampson
 
-	A simple TCP server that waits for a connection.
-	When a connection is made, the server sends "hello" to the client.
-	It then repeats back anything it receives from the client.
-	All the calls are blocking -- so this program only handles
-	one connection at a time.
+	A simple server that waits for connections.
+	The server repeats back anything it receives from the client.
 */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <winsock2.h>
-#include <iostream>
-#include <sstream>
-#include <iomanip>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <list>
+#include <WinSock2.h>
+
+#include "connection.h"
+#include "utils.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -23,41 +21,19 @@
 
 // The TCP port number for the server to listen on
 #define SERVERPORT 5555
-
-// The message the server will send when the client connects
-#define WELCOME "hello"
-
-// The (fixed) size of message that we send between the two programs
-#define MESSAGESIZE 40
-
-#define ERROR_VALUE -1
-
-// Prototypes
-void die(const char *message);
-
+#define MAX_CLIENTS 5
 
 int main()
 {
 	printf("Echo Server\n");
 
-	// Initialise the WinSock library -- we want version 2.2.
-	WSADATA w;
-	int error = WSAStartup(0x0202, &w);
-	if (error != 0)
-	{
-		die("WSAStartup failed");
-	}
-	if (w.wVersion != 0x0202)
-	{
-		die("Wrong WinSock version");
-	}
+	startWinSock();
 
 	// Create a TCP socket that we'll use to listen for connections.
 	SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-
-	// Test for error creating socket
-	if (serverSocket == INVALID_SOCKET) {
-		die("Creating Server Socket Failed: " + WSAGetLastError());
+	if (serverSocket == INVALID_SOCKET)
+	{
+		die("socket failed");
 	}
 
 	// Fill out a sockaddr_in structure to describe the address we'll listen on.
@@ -68,8 +44,6 @@ int main()
 	serverAddr.sin_port = htons(SERVERPORT);
 
 	// Bind the server socket to that address.
-
-	
 	if (bind(serverSocket, (const sockaddr *) &serverAddr, sizeof(serverAddr)) != 0)
 	{
 		die("bind failed");
@@ -78,7 +52,6 @@ int main()
 	// ntohs does the opposite of htons.
 	printf("Server socket bound to address %s, port %d\n", inet_ntoa(serverAddr.sin_addr), ntohs(serverAddr.sin_port));
 
-	
 	// Make the socket listen for connections.
 	if (listen(serverSocket, 1) != 0)
 	{
@@ -87,110 +60,165 @@ int main()
 
 	printf("Server socket listening\n");
 
+	// The list of clients currently connected to the server.
+	std::list<Connection *> conns;
+
+	// The server's main loop, where we'll wait for new connections to
+	// come in, or for new data to appear on our existing connections.
 	while (true)
 	{
-		printf("Waiting for a connection...\n");
+		// The structure that describes the set of sockets we're interested in.
+		fd_set readable;
+		fd_set writable;
+		FD_ZERO(&readable);
+		FD_ZERO(&writable);
 
-		// Accept a new connection to the server socket.
-		// This gives us back a new socket connected to the client, and
-		// also fills in an address structure with the client's address.
-		sockaddr_in clientAddr;
-		int addrSize = sizeof(clientAddr);
-		SOCKET clientSocket = accept(serverSocket, (sockaddr *) &clientAddr, &addrSize);
+		// Add the server socket, which will become "readable" if there's a new
+		// connection to accept.
+		FD_SET(serverSocket, &readable);
 
-
-		//If the cleint socket is invalid print an error message and return to listening
-		if (clientSocket == INVALID_SOCKET)
+		// Add all of the connected clients' sockets.
+		for (auto conn: conns)
 		{
-			printf("***Invalid client socket***\n");
-		
-		}
-		else {
-			printf("Client has connected from IP address %s, port %d!\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
-
-			// We'll use this array to hold the messages we exchange with the client.
-			char buffer[MESSAGESIZE];
-			char * messageBuffer  = NULL;
-
-			// Fill the buffer with - characters to start with.
-			memset(buffer, '-', MESSAGESIZE);
-
-			// Send a welcome message to the client.
-			memcpy(buffer, WELCOME, strlen(WELCOME));
-			
-			// Check for error from send
-			if (send(clientSocket, buffer, MESSAGESIZE, 0) == ERROR_VALUE) {
-				die("Send failed: " + WSAGetLastError());
-			}
-
-			while (true)
+			if (conn->wantWrite())
 			{
-				char  messageLength[5];
-				recv(clientSocket, messageLength, 5, 0);
+				FD_SET(conn->sock(), &writable);
+			}
+			if (conn->wantRead())
+			{
+				FD_SET(conn->sock(), &readable);
+			}
+		}
 
-				
+		// The structure that describes how long to wait for something to happen.
+		timeval timeout;
+		// We want a 2.5-second timeout.
+		timeout.tv_sec = 2;
+		timeout.tv_usec = 500000;
 
-				int length;
-				std::istringstream(messageLength) >> length;
+		// Wait for one of the sockets to become readable.
+		// (We can only get away with passing 0 for the first argument here because
+		// we're on Windows -- other sockets implementations need a proper value there.)
+		int count = select(0, &readable, &writable, NULL, &timeout);
+		if (count == SOCKET_ERROR)
+		{
+			die("select failed");
+		}
+		printf("%d clients; %d sockets are ready\n", conns.size(), count);
+		// readable now tells us which sockets are ready.
+		// If count == 0 (i.e. no sockets are ready) then the timeout occurred.
 
-				std::cout << "Message Length: " << length;
-				
-				messageBuffer = new char[length];
-				// Receive as much data from the client as will fit in the buffer.
-				int count = recv(clientSocket, messageBuffer, length, 0);
-
-				std::stringstream ss;
-				ss << std::setw(5) << std::setfill('0') << length;
-				std::string lineLength = ss.str();
-
-				std::string line = messageBuffer;
-
-				line.insert(0, lineLength);
-
-
-				std::cout <<"Message Buffer: "<< line;
-				
-				// Check for errors from recv
-				if (count == ERROR_VALUE) {
-					die("recv failed: " + WSAGetLastError());
-				}
-
-				if (count <= 0) {
-					printf("Client closed connection\n");
-					break;
-				}
-				if (count != length) {
-					die("Got strange-sized message from client");
-				}
-				if (memcmp(buffer, "quit", 4) == 0) {
-					printf("Client asked to quit\n");
-					break;
-				}
-
-				// (Note that recv will not write a \0 at the end of the message it's
-				// received -- so we can't just use it as a C-style string directly
-				// without writing the \0 ourself.)
-
-				printf("Received %d bytes from the client: '", count);
-				fwrite(messageBuffer, 1, count, stdout);
-				printf("'\n");
-
-				char * replyBuffer = new char[line.length()];
-				
-				// Send the same data back to the client.
-				memcpy(replyBuffer, line.c_str(), line.length());
-
-				// Check for error from send
-				if (send(clientSocket, replyBuffer, line.length(), 0) == ERROR_VALUE) {
-					die("Send failed: " + WSAGetLastError());
-				}
-				
+		// Is there a new connection to accept?
+		if (FD_ISSET(serverSocket, &readable))
+		{
+			// Accept a new connection to the server socket.
+			// This gives us back a new socket connected to the client, and
+			// also fills in an address structure with the client's address.
+			sockaddr_in clientAddr;
+			int addrSize = sizeof(clientAddr);
+			SOCKET clientSocket = accept(serverSocket, (sockaddr *) &clientAddr, &addrSize);
+			
+			if (clientSocket == INVALID_SOCKET)
+			{
+				printf("accept failed\n");
+				continue;
 			}
 
-			printf("Closing connection\n");
+			char sendBuffer_[MESSAGESIZE];
 
-			// Close the connection.
-			closesocket(clientSocket);
+			if (conns.size() >= MAX_CLIENTS) {
+				
+				printf("429: Too many requests");
+				memset(sendBuffer_, '-', MESSAGESIZE);
+				memcpy(sendBuffer_, "429", 3);
+				
+				count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
+				if (count != MESSAGESIZE)
+				{
+					printf("send failed\n");
+					return true;
+				}
+
+				closesocket(clientSocket);
+			}else {
+				if (conns.size() >= 1)
+				{
+					memset(sendBuffer_, '-', MESSAGESIZE);
+					memcpy(sendBuffer_, "NO ROOM", 7);
+					count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
+					if (count != MESSAGESIZE)
+					{
+						printf("send failed\n");
+						return true;
+					}
+
+					closesocket(clientSocket);
+				}
+				else
+				{
+					memset(sendBuffer_, '-', MESSAGESIZE);
+					memcpy(sendBuffer_, "wELCOME", 7);
+					count = send(clientSocket, sendBuffer_, MESSAGESIZE, 0);
+					if (count != MESSAGESIZE)
+					{
+						printf("send failed\n");
+						return true;
+					}
+					// Create a new Connection object, and add it to the collection.
+					conns.push_back(new Connection(clientSocket));
+				}
+			}
+
+			
+		}
+
+		// Check each of the clients.
+		for (auto it = conns.begin(); it != conns.end(); )  // note no ++it here
+		{
+			Connection *conn = *it;
+			bool dead = false;
+
+			// Is there data to read from this client's socket?
+			if (FD_ISSET(conn->sock(), &readable))
+			{
+				dead |= conn->doRead();
+			}
+
+			if (dead)
+			{
+				// The client said it was dead -- so free the object,
+				// and remove it from the conns list.
+				delete conn;
+				it = conns.erase(it);
+			}
+			else
+			{
+				++it;
+			}
+		}
+
+		for (auto it = conns.begin(); it != conns.end(); )  // note no ++it here
+		{
+			Connection *conn = *it;
+			bool dead = false;
+
+			// Is there data to read from this client's socket?
+			if (FD_ISSET(conn->sock(), &writable))
+			{
+				dead |= conn->doWrite();
+			}
+
+			if (dead)
+			{
+				// The client said it was dead -- so free the object,
+				// and remove it from the conns list.
+				delete conn;
+				it = conns.erase(it);
+			}
+			else
+			{
+				++it;
+			}
 		}
 
 	}
@@ -200,17 +228,4 @@ int main()
 	closesocket(serverSocket);
 	WSACleanup();
 	return 0;
-}
-
-
-// Print an error message and exit.
-void die(const char *message) {
-	fprintf(stderr, "Error: %s (WSAGetLastError() = %d)\n", message, WSAGetLastError());
-
-#ifdef _DEBUG
-	// Debug build -- drop the program into the debugger.
-	abort();
-#else
-	exit(1);
-#endif
 }
